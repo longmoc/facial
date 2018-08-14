@@ -33,3 +33,6 @@ def get_git_loss(embeddings, labels, num_classes):
     loss = lambda_c * loss_c + lambda_g * loss_g
 
     return loss, centers_update_op
+
+
+

@@ -14,8 +14,8 @@ import lfw
 import models.L_Resnet50E_IR as network
 from lfw_eval import evaluate_double
 # from add_loss import logits_compute
-from arc_loss import logits_compute
-# from combined_margin_arc_loss import logits_compute
+# from arc_loss import logits_compute
+from combined_margin_arc_loss import logits_compute
 
 best_acc_model_dir = 'best_acc_model_arc'
 lfw_dir = '../lfw_aligned'
@@ -40,7 +40,7 @@ def main(args):
         range_size = labels.get_shape()[0]
         global_step = tf.Variable(0, trainable=False)
         index_queue = tf.train.range_input_producer(range_size, num_epochs=None,
-                                                    shuffle=True, seed=None, capacity=64)
+                                                    shuffle=True, seed=None, capacity=32)
         index_dequeue_op = index_queue.dequeue_many(args.batch_size * args.epoch_size, 'index_dequeue')
 
         learning_rate_placeholder = tf.placeholder(tf.float32, name='learning_rate')
@@ -52,7 +52,7 @@ def main(args):
 
         labels_placeholder = tf.placeholder(tf.int64, shape=(None, 1), name='labels')
 
-        input_queue = data_flow_ops.FIFOQueue(capacity=2861458,
+        input_queue = data_flow_ops.FIFOQueue(capacity=2861459,
                                               dtypes=[tf.string, tf.int64],
                                               shapes=[(1,), (1,)],
                                               shared_name=None, name=None)
@@ -87,7 +87,7 @@ def main(args):
                                          bottleneck_layer_size=embedding_size, weight_decay=args.weight_decay)
 
         embeddings = tf.nn.l2_normalize(prelogits, 1, 1e-10, name='embeddings')
-        logits = logits_compute(embeddings, label_batch, embedding_size, num_classes)
+        logits = logits_compute(embeddings, label_batch, embedding_size, num_classes,)
 
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step, args.epoch_size, 0.9,
                                                    staircase=True)
@@ -95,10 +95,11 @@ def main(args):
 
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=label_batch, logits=logits, name='cross_entropy_per_example')
-        cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-
+        # cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
+        #
         regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-        total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
+        # total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
+        total_loss = tf.reduce_mean(cross_entropy, name='total_loss')
         tf.add_to_collection('losses', total_loss)
 
         saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=1)
@@ -156,6 +157,7 @@ def train(args, sess, epoch, image_list, label_list, index_dequeue_op, enqueue_o
         start_time = time.time()
         feed_dict = {learning_rate_placeholder: lr, phase_train_placeholder: True,
                      batch_size_placeholder: args.batch_size}
+        # updated_logits = sess.run(['combined_loss/updated_logits:0'], feed_dict=feed_dict)
         if batch_number % 100 == 0:
             err, _, step, reg_loss, summary_str = sess.run(
                 [loss, train_op, global_step, regularization_losses, summary_op], feed_dict=feed_dict)
