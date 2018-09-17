@@ -38,5 +38,4 @@ def logits_compute(embedding, labels, embedding_size, num_classes):
         s_cos_t = tf.multiply(s, cos_t, name='scalar_cos_t')
 
         output = tf.add(tf.multiply(s_cos_t, inv_mask), tf.multiply(cos_mt_temp, mask), name='arcface_loss_output')
-        print(output.get_shape())
     return output

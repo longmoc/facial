@@ -1,12 +1,13 @@
 import os
 import sys
+import random
 import argparse
 import time
 from datetime import datetime
 
 import tensorflow as tf
 from tensorflow.python.framework import ops
-from tensorflow.python.ops import data_flow_ops
+from tensorflow.python.ops import data_flow_ops, array_ops
 import numpy as np
 
 import facenet
@@ -21,7 +22,7 @@ best_acc_model_dir = 'best_acc_model_arc'
 lfw_dir = '../lfw_aligned'
 lfw_pairs = '../lfw_aligned/pairs.txt'
 lfw_batch_size = 128
-
+image_size = (112, 96)
 embedding_size = 512
 
 
@@ -29,18 +30,21 @@ def main(args):
     if not os.path.isdir(args.train_dir):
         os.mkdir(args.train_dir)
 
+    np.random.seed(seed=args.seed)
+    random.seed(args.seed)
     train_set = facenet.get_dataset(args.data_dir)
     num_classes = len(train_set)
 
     cur_time = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
 
     with tf.Graph().as_default():
+        tf.set_random_seed(args.seed)
+        global_step = tf.Variable(0, trainable=False)
         image_list, label_list = facenet.get_image_paths_and_labels(train_set)
         labels = ops.convert_to_tensor(label_list, dtype=tf.int32)
-        range_size = labels.get_shape()[0]
-        global_step = tf.Variable(0, trainable=False)
+        range_size = array_ops.shape(labels)[0]
         index_queue = tf.train.range_input_producer(range_size, num_epochs=None,
-                                                    shuffle=True, seed=None, capacity=64)
+                                                    shuffle=True, seed=None, capacity=32)
         index_dequeue_op = index_queue.dequeue_many(args.batch_size * args.epoch_size, 'index_dequeue')
 
         learning_rate_placeholder = tf.placeholder(tf.float32, name='learning_rate')
@@ -67,13 +71,13 @@ def main(args):
                 file_contents = tf.read_file(filename)
                 image = tf.cast(tf.image.decode_image(file_contents, channels=3), tf.float32)
                 image = tf.image.random_flip_left_right(image)
-                image.set_shape((112, 96, 3))
+                image.set_shape((image_size[0], image_size[1], 3))
                 images.append(tf.subtract(image, 127.5) * 0.0078125)
             images_and_labels.append([images, label])
 
         image_batch, label_batch = tf.train.batch_join(
             images_and_labels, batch_size=batch_size_placeholder,
-            shapes=[(112, 96, 3), ()], enqueue_many=True,
+            shapes=[(image_size[0], image_size[1], 3), ()], enqueue_many=True,
             capacity=4 * num_preprocess_threads * args.batch_size,
             allow_smaller_final_batch=True)
         image_batch = tf.identity(image_batch, 'input')

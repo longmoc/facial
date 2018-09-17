@@ -3,7 +3,8 @@ import tensorflow.contrib.slim as slim
 
 
 def prelu(x):
-    alphas = tf.Variable(tf.constant(0.25, dtype=tf.float32, shape=[x.get_shape()[-1]]), name='prelu_alphas')
+    alphas = tf.get_variable(name='prelu_alphas', dtype=tf.float32, initializer=tf.constant_initializer(value=0.25),
+                             shape=[x.get_shape()[-1]])
     pos = tf.nn.relu(x)
     neg = alphas * (x - abs(x)) * 0.5
     return pos + neg

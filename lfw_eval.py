@@ -8,46 +8,51 @@ import tensorflow as tf
 from scipy import misc
 
 
-def evaluate_double(sess, phase_train_placeholder, embeddings, lfw_batch_size, step, summary_writer, best_accuracy,
-                    images_placeholder, lfw_dir, lfw_pairs, lfw_file_ext, saver, model_dir, model_name):
+def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phase_train_placeholder,
+             batch_size_placeholder, embeddings, labels, image_paths, actual_issame, batch_size, nrof_folds, log_dir,
+             step, summary_writer, best_accuracy, saver_save, model_dir, model_name):
     start_time = time.time()
-
     # Run forward pass to calculate embeddings
     print('Runnning forward pass on LFW images')
-    pairs = lfw.read_pairs(os.path.expanduser(lfw_pairs))
-    paths, actual_issame = lfw.get_paths(os.path.expanduser(lfw_dir), pairs, lfw_file_ext)
-    batch_size = lfw_batch_size
-    nrof_images = len(paths)
-    print('Validate on %d images' % nrof_images)
-    nrof_batches = int(math.ceil(1.0 * nrof_images / batch_size))
-    emb_array = np.zeros((nrof_images, 512))
-    for i in range(nrof_batches):
-        start_index = i * batch_size
-        end_index = min((i + 1) * batch_size, nrof_images)
-        paths_batch = paths[start_index:end_index]
-        images = load_data(paths_batch)
-        images_flip = np.flip(images, 2)
-        feed_dict = {images_placeholder: images, phase_train_placeholder: False}
-        feed_dict_flip = {images_placeholder: images_flip, phase_train_placeholder: False}
-        emb = sess.run(embeddings, feed_dict=feed_dict)
-        emb_flip = sess.run(embeddings, feed_dict=feed_dict_flip)
-        emb_average = (emb + emb_flip) / 2.0
-        emb_array[start_index:end_index, :] = emb_average
 
-    accuracy, thre = evaluate_with_no_cv(emb_array, actual_issame)
+    # Enqueue one epoch of image paths and labels
+    labels_array = np.expand_dims(np.arange(0, len(image_paths)), 1)
+    image_paths_array = np.expand_dims(np.array(image_paths), 1)
+
+    sess.run(enqueue_op, {image_paths_placeholder: image_paths_array, labels_placeholder: labels_array})
+
+    embedding_size = embeddings.get_shape()[1]
+    nrof_images = len(actual_issame) * 2
+    assert nrof_images % batch_size == 0, 'The number of LFW images must be an integer multiple of the LFW batch size'
+    nrof_batches = nrof_images // batch_size
+    emb_array = np.zeros((nrof_images, embedding_size))
+    lab_array = np.zeros((nrof_images,))
+    for _ in range(nrof_batches):
+        feed_dict = {phase_train_placeholder: False, batch_size_placeholder: batch_size}
+        emb, lab = sess.run([embeddings, labels], feed_dict=feed_dict)
+        lab_array[lab] = lab
+        emb_array[lab] = emb
+
+    assert np.array_equal(lab_array, np.arange(
+        nrof_images)) == True, 'Wrong labels used for evaluation, possibly caused by training examples left in the input pipeline'
+    _, _, accuracy, val, val_std, far = lfw.evaluate(emb_array, actual_issame, nrof_folds=nrof_folds)
 
     if np.mean(accuracy) > best_accuracy:
+        save_variables_and_metagraph(sess, saver_save, summary_writer, model_dir, model_name, step)
         best_accuracy = np.mean(accuracy)
-        save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_name, step)
 
-    print('Accuracy: %1.3f Threshold: %1.3f' % (accuracy, thre))
-
+    print('Accuracy: %1.3f+-%1.3f' % (np.mean(accuracy), np.std(accuracy)))
+    print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
     lfw_time = time.time() - start_time
+    # Add validation loss and accuracy to summary
     summary = tf.Summary()
-    summary.value.add(tag='lfw/accuracy', simple_value=accuracy)
+    # pylint: disable=maybe-no-member
+    summary.value.add(tag='lfw/accuracy', simple_value=np.mean(accuracy))
+    summary.value.add(tag='lfw/val_rate', simple_value=val)
     summary.value.add(tag='time/lfw', simple_value=lfw_time)
     summary_writer.add_summary(summary, step)
-
+    with open(os.path.join(log_dir, 'lfw_result.txt'), 'at') as f:
+        f.write('%d\t%.5f\t%.5f\n' % (step, np.mean(accuracy), val))
     return best_accuracy
 
 
@@ -70,9 +75,9 @@ def evaluate_with_no_cv(emb_array, actual_issame):
     return best_acc, best_thre
 
 
-def load_data(image_paths):
+def load_data(image_paths, image_size):
     nrof_samples = len(image_paths)
-    images = np.zeros((nrof_samples, 112, 96, 3))
+    images = np.zeros((nrof_samples, image_size[0], image_size[1], 3))
     for i in range(nrof_samples):
         img = misc.imread(image_paths[i])
         img = (img * 1.0 - 127.5) / 128

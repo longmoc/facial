@@ -1,12 +1,13 @@
 import os
 import sys
+import random
 import argparse
 import time
 from datetime import datetime
 
 import tensorflow as tf
 from tensorflow.python.framework import ops
-from tensorflow.python.ops import data_flow_ops
+from tensorflow.python.ops import data_flow_ops, array_ops
 import tensorflow.contrib.slim as slim
 import numpy as np
 
@@ -16,27 +17,34 @@ from lfw_eval import evaluate_double
 import gitloss
 
 best_acc_model_dir = 'best_acc_model_arc'
-lfw_dir = '../lfw_aligned'
 lfw_pairs = '../lfw_aligned/pairs.txt'
 lfw_batch_size = 128
-
+image_size = (112, 96)
 embedding_size = 512
+
+random_seed = 666
 
 
 def main(args):
     if not os.path.isdir(args.train_dir):
-        os.mkdir(args.train_dir)
+        os.makedirs(args.train_dir)
 
+    if not os.path.isdir(args.log_dir):
+        os.makedirs(args.log_dir)
+
+    np.random.seed(seed=random_seed)
+    random.seed(random_seed)
     train_set = facenet.get_dataset(args.data_dir)
     num_classes = len(train_set)
 
     cur_time = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
 
     with tf.Graph().as_default():
+        tf.set_random_seed(random_seed)
+        global_step = tf.Variable(0, trainable=False)
         image_list, label_list = facenet.get_image_paths_and_labels(train_set)
         labels = ops.convert_to_tensor(label_list, dtype=tf.int32)
-        range_size = labels.get_shape()[0]
-        global_step = tf.Variable(0, trainable=False)
+        range_size = array_ops.shape(labels)[0]
         index_queue = tf.train.range_input_producer(range_size, num_epochs=None,
                                                     shuffle=True, seed=None, capacity=32)
         index_dequeue_op = index_queue.dequeue_many(args.batch_size * args.epoch_size, 'index_dequeue')
@@ -50,7 +58,7 @@ def main(args):
 
         labels_placeholder = tf.placeholder(tf.int64, shape=(None, 1), name='labels')
 
-        input_queue = data_flow_ops.FIFOQueue(capacity=3213115,
+        input_queue = data_flow_ops.FIFOQueue(capacity=2000000,
                                               dtypes=[tf.string, tf.int64],
                                               shapes=[(1,), (1,)],
                                               shared_name=None, name=None)
@@ -65,13 +73,13 @@ def main(args):
                 file_contents = tf.read_file(filename)
                 image = tf.cast(tf.image.decode_image(file_contents, channels=3), tf.float32)
                 image = tf.image.random_flip_left_right(image)
-                image.set_shape((112, 96, 3))
+                image.set_shape((image_size[0], image_size[1], 3))
                 images.append(tf.subtract(image, 127.5) * 0.0078125)
             images_and_labels.append([images, label])
 
         image_batch, label_batch = tf.train.batch_join(
             images_and_labels, batch_size=batch_size_placeholder,
-            shapes=[(112, 96, 3), ()], enqueue_many=True,
+            shapes=[(image_size[0], image_size[1], 3), ()], enqueue_many=True,
             capacity=4 * num_preprocess_threads * args.batch_size,
             allow_smaller_final_batch=True)
         image_batch = tf.identity(image_batch, 'input')
@@ -92,7 +100,7 @@ def main(args):
         git_loss, centers_update_op = gitloss.get_git_loss(prelogits, label_batch, num_classes)
         tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, git_loss)
 
-        learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step, args.epoch_size, 0.9,
+        learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step, args.epoch_size, 1,
                                                    staircase=True)
         tf.summary.scalar('learning_rate', learning_rate)
 
@@ -104,6 +112,7 @@ def main(args):
         total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
         tf.add_to_collection('losses', total_loss)
 
+        loader = tf.train.Saver(tf.trainable_variables(), max_to_keep=1)
         saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=1)
 
         train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step,
@@ -113,17 +122,17 @@ def main(args):
         sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
-        summary_writer = tf.summary.FileWriter(args.train_dir, sess.graph)
+        summary_writer = tf.summary.FileWriter(args.log_dir, sess.graph)
         coord = tf.train.Coordinator()
         tf.train.start_queue_runners(coord=coord, sess=sess)
 
         with sess.as_default():
             if args.pretrained:
                 print('Restoring model: %s' % args.pretrained)
-                saver.restore(sess, args.pretrained)
+                loader.restore(sess, args.pretrained)
             print('Running training')
+
             epoch = 0
-            best_accuracy = 0.0
             while epoch < args.num_epochs:
                 step = sess.run(global_step, feed_dict=None)
                 epoch = step // args.epoch_size
@@ -133,9 +142,8 @@ def main(args):
                       regularization_losses, saver, args.train_dir, cur_time)
 
                 print('validation running...')
-                best_accuracy = evaluate_double(sess, phase_train_placeholder, embeddings, lfw_batch_size, step,
-                                                summary_writer, best_accuracy, image_batch, lfw_dir, lfw_pairs, 'jpg',
-                                                saver, best_acc_model_dir, cur_time)
+                accuracy = evaluate_double(sess, phase_train_placeholder, embeddings, lfw_batch_size, step,
+                                           summary_writer, image_batch, args.lfw_dir, lfw_pairs, 'jpg', image_size)
 
 
 def train(args, sess, epoch, image_list, label_list, index_dequeue_op, enqueue_op, image_paths_placeholder,
@@ -168,7 +176,7 @@ def train(args, sess, epoch, image_list, label_list, index_dequeue_op, enqueue_o
             summary.value.add(tag='train/loss', simple_value=err)
             summary.value.add(tag='train/git_loss', simple_value=np.sum(reg_loss))
             summary_writer.add_summary(summary, global_step=step)
-            if batch_number % 1000 == 0:
+            if batch_number % 1000 == 0 and batch_number:
                 save_variables_and_metagraph(sess, saver, summary_writer, model_dir, cur_time, step)
         else:
             err, _, step, reg_loss, _ = sess.run(
@@ -205,7 +213,9 @@ def parse_arguments(argv):
     parser.add_argument('--learning_rate', type=float, help='.', default=0.1)
     parser.add_argument('--weight_decay', type=float, help='.', default=0.0)
     parser.add_argument('--num_epochs', type=int, help='.', default=100)
-    parser.add_argument('--train_dir', type=str, help='.', default='./trained_model_arc')
+    parser.add_argument('--train_dir', type=str, help='.', default='./trained_models/arc')
+    parser.add_argument('--log_dir', type=str, help='.', default='./logs/log')
+    parser.add_argument('--lfw_dir', type=str, help='.', default='../lfw_aligned')
     parser.add_argument('--pretrained', type=str, help='.')
     return parser.parse_args(argv)
 

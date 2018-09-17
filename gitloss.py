@@ -1,5 +1,5 @@
 import tensorflow as tf
-import numpy as np
+
 
 lambda_c = 1.
 lambda_g = 1.
@@ -12,7 +12,7 @@ def get_git_loss(embeddings, labels, num_classes):
     centers_batch = tf.gather(centers, labels)
     loss_c = tf.reduce_mean(tf.square(embeddings - centers_batch))
 
-    diffs = (embeddings[:, tf.newaxis] - num_classes[tf.newaxis, :])
+    diffs = (embeddings[:, tf.newaxis] - centers_batch[tf.newaxis, :])
     diffs_shape = tf.shape(diffs)
     print(diffs.get_shape())
 
