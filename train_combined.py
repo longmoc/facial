@@ -147,6 +147,11 @@ def main(args):
             print('Running training')
             epoch = 0
             best_accuracy = 0.0
+            # step = sess.run(global_step, feed_dict=None)
+            # best_accuracy = evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder,
+            #                          phase_train_placeholder, batch_size_placeholder, embeddings, label_batch,
+            #                          lfw_paths, actual_issame, lfw_batch_size, 10, args.log_dir, step,
+            #                          summary_writer, best_accuracy, saver, args.train_dir, cur_time)
 
             while epoch < args.num_epochs:
                 step = sess.run(global_step, feed_dict=None)

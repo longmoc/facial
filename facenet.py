@@ -411,19 +411,21 @@ class ImageClass():
   
 def get_dataset(paths):
     dataset = []
-    for path in paths.split(':'):
-        path_exp = os.path.expanduser(path)
-        classes = os.listdir(path_exp)
-        classes.sort()
-        nrof_classes = len(classes)
-        for i in range(nrof_classes):
-            class_name = classes[i]
-            facedir = os.path.join(path_exp, class_name)
-            if os.path.isdir(facedir):
-                images = os.listdir(facedir)
-                image_paths = [os.path.join(facedir,img) for img in images]
-                #if len(image_paths)>30:
-                dataset.append(ImageClass(class_name, image_paths))
+    path_exp = os.path.expanduser(paths)
+    print(path_exp)
+    classes = os.listdir(path_exp)
+    classes.sort()
+    print(len(classes))
+    nrof_classes = len(classes)
+    for i in range(nrof_classes):
+        class_name = classes[i]
+        facedir = os.path.join(path_exp, class_name)
+        if os.path.isdir(facedir):
+            images = os.listdir(facedir)
+            image_paths = [os.path.join(facedir,img) for img in images]
+            #if len(image_paths)>30:
+            dataset.append(ImageClass(class_name, image_paths))
+    print('OK')
     return dataset
 
 def split_dataset(dataset, split_ratio, mode):
